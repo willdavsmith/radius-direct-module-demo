@@ -1,0 +1,66 @@
+name: E2E (k3d)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      CLUSTER_NAME: radius-e2e
+      LOCAL_REGISTRY: localhost
+      IMAGE_TAG: e2e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+
+      - name: Create k3d cluster
+        run: |
+          k3d cluster create "$CLUSTER_NAME" --wait --timeout 120s
+          kubectl wait --for=condition=ready node --all --timeout=120s
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: radius/go.mod
+          cache-dependency-path: radius/go.sum
+
+      - name: Build control-plane images
+        working-directory: radius
+        run: |
+          make docker-build-applications-rp \
+            DOCKER_REGISTRY="$LOCAL_REGISTRY" \
+            DOCKER_TAG_VERSION="$IMAGE_TAG"
+          make docker-build-dynamic-rp \
+            DOCKER_REGISTRY="$LOCAL_REGISTRY" \
+            DOCKER_TAG_VERSION="$IMAGE_TAG"
+
+      - name: Side-load images into k3d
+        run: |
+          k3d image import "$LOCAL_REGISTRY/applications-rp:$IMAGE_TAG" -c "$CLUSTER_NAME"
+          k3d image import "$LOCAL_REGISTRY/dynamic-rp:$IMAGE_TAG" -c "$CLUSTER_NAME"
+          # The terraform-init init container pulls alpine from Docker Hub,
+          # which is rate-limited anonymously in CI. Side-load it.
+          docker pull alpine:3.23
+          k3d image import alpine:3.23 -c "$CLUSTER_NAME"
+
+      - name: Run E2E
+        uses: ./.github/actions/radius-direct-module-e2e
+        with:
+          applications-rp-image: ${{ env.LOCAL_REGISTRY }}/applications-rp
+          dynamic-rp-image: ${{ env.LOCAL_REGISTRY }}/dynamic-rp
+          image-tag: ${{ env.IMAGE_TAG }}
+          module-template-path: git::https://github.com/${{ github.repository }}.git//modules/redis?ref=${{ github.sha }}
+
+      - name: Cleanup cluster
+        if: always()
+        run: k3d cluster delete "$CLUSTER_NAME" 2>/dev/null || true

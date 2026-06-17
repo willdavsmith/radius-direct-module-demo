@@ -1,0 +1,22 @@
+namespace: Demo.Datastores
+types:
+  redisCaches:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            endpoint:
+              type: string
+              description: In-cluster Redis endpoint. Populated by Radius from the module's `host` output via the recipe `outputs` mapping.
+            port:
+              type: string
+              description: Redis port. Populated by Radius from the module's `port` output via the recipe `outputs` mapping.
+          required:
+            - environment

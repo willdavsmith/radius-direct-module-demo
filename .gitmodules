@@ -1,0 +1,4 @@
+[submodule "radius"]
+	path = radius
+	url = https://github.com/radius-project/radius.git
+	branch = willdavsmith/recipe-direct-module-support

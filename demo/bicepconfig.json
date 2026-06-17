@@ -1,0 +1,9 @@
+{
+  "experimentalFeaturesEnabled": {
+    "extensibility": true
+  },
+  "extensions": {
+    "radius": "radius-extension.tgz",
+    "redisCaches": "redisCaches-extension.tgz"
+  }
+}
