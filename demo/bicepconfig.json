@@ -4,6 +4,6 @@
   },
   "extensions": {
     "radius": "radius-extension.tgz",
-    "redisCaches": "redisCaches-extension.tgz"
+    "deployments": "deployments-extension.tgz"
   }
 }

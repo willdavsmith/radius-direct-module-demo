@@ -1,0 +1,26 @@
+namespace: Demo.Kubernetes
+types:
+  deployments:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            image:
+              type: string
+              description: Container image the Kubernetes Deployment runs. Set by the developer and passed to the module via a {{context.resource.properties.image}} expression.
+            deploymentName:
+              type: string
+              description: Name of the created Kubernetes Deployment. Populated by Radius from the module's `name` output via the recipe `outputs` mapping.
+            namespace:
+              type: string
+              description: Namespace the Deployment was created in. Populated by Radius from the module's `namespace` output via the recipe `outputs` mapping.
+          required:
+            - environment
+            - image

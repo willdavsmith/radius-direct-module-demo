@@ -52,6 +52,11 @@ jobs:
           # which is rate-limited anonymously in CI. Side-load it.
           docker pull alpine:3.23
           k3d image import alpine:3.23 -c "$CLUSTER_NAME"
+          # The demo resource's recipe deploys this image as a Kubernetes
+          # Deployment (see demo/app.bicep). Side-load it too so the in-cluster
+          # pull is hermetic. Must match the image in demo/app.bicep.
+          docker pull redis:7-alpine
+          k3d image import redis:7-alpine -c "$CLUSTER_NAME"
 
       - name: Run E2E
         uses: ./.github/actions/radius-direct-module-e2e
@@ -59,7 +64,6 @@ jobs:
           applications-rp-image: ${{ env.LOCAL_REGISTRY }}/applications-rp
           dynamic-rp-image: ${{ env.LOCAL_REGISTRY }}/dynamic-rp
           image-tag: ${{ env.IMAGE_TAG }}
-          module-template-path: git::https://github.com/${{ github.repository }}.git//modules/redis?ref=${{ github.sha }}
 
       - name: Cleanup cluster
         if: always()

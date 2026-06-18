@@ -1,6 +1,6 @@
 # Direct Module Support for Recipes — Demo
 
-A demo of [Radius **direct module support for recipes**](https://github.com/radius-project/radius/pull/12109): pointing a recipe's `recipeLocation` straight at a **standard, off-the-shelf Terraform module** — no Radius-specific wrapping required.
+A demo of [Radius **direct module support for recipes**](https://github.com/radius-project/radius/pull/12109): pointing a recipe's `recipeLocation` straight at a **standard, off-the-shelf Terraform Registry module** — no Radius-specific wrapping required.
 
 Today, every module used as a Radius recipe must be wrapped to add a `context` input variable and a structured `result` output. This blocks direct use of community modules (Terraform Registry, Azure Verified Modules) and adds maintenance overhead. With direct module support, a platform engineer points `recipeLocation` at a plain module, and Radius:
 
@@ -12,61 +12,57 @@ Existing wrapped recipes keep working unchanged.
 
 ## What this demo shows
 
-A standard Terraform module ([`modules/redis`](modules/redis)) deploys Redis to Kubernetes. It has **no `context` variable and no `result` output** — it is just a normal module with `name` / `namespace` / `port` variables and `host` / `port` outputs.
+The recipe points directly at the public Terraform Registry module [`terraform-iaac/deployment/kubernetes`](https://registry.terraform.io/modules/terraform-iaac/deployment/kubernetes/latest), pinned to a specific version. It is an ordinary community module — **no `context` variable, no `result` output** — with `name` / `namespace` / `image` inputs and `name` / `namespace` outputs.
 
-The platform engineer wires it to a custom resource type (`Demo.Datastores/redisCaches`) with a recipe pack ([`demo/platform.bicep`](demo/platform.bicep)):
+The platform engineer wires it to a custom resource type (`Demo.Kubernetes/deployments`) with a recipe pack ([`demo/platform.bicep`](demo/platform.bicep)):
 
 ```bicep
-'Demo.Datastores/redisCaches': {
+'Demo.Kubernetes/deployments': {
   recipeKind: 'terraform'
-  recipeLocation: moduleTemplatePath          // git:: URL of the plain module
+  recipeLocation: 'terraform-iaac/deployment/kubernetes:1.4.6'   // <source>:<version>
   parameters: {
-    name: '{{context.resource.name}}'         // resolved per-resource
+    name: '{{context.resource.name}}'                  // resolved per-resource
     namespace: '{{context.runtime.kubernetes.namespace}}'
-    port: 6379
+    image: '{{context.resource.properties.image}}'     // resolved from the resource below
   }
   outputs: {
-    endpoint: 'host'                          // resource property <- module output
-    port: 'port'
+    deploymentName: 'name'                             // resource property <- module output
+    namespace: 'namespace'
   }
 }
 ```
 
-A developer then deploys an ordinary resource ([`demo/app.bicep`](demo/app.bicep)) with no module details at all:
+A developer then deploys an ordinary resource ([`demo/app.bicep`](demo/app.bicep)) with no module details at all — just the image:
 
 ```bicep
-resource cache 'Demo.Datastores/redisCaches@2023-10-01-preview' = {
+resource deployment 'Demo.Kubernetes/deployments@2023-10-01-preview' = {
   name: 'demo-redis'
   properties: {
     environment: environment
     application: app.id
+    image: 'redis:7-alpine'
   }
 }
 ```
 
-Radius resolves the parameter expressions, runs the module, and populates `cache.properties.endpoint` and `cache.properties.port` from the module outputs (note the rename: module output `host` → property `endpoint`).
+Radius pins and fetches the registry module at `1.4.6`, resolves the parameter expressions (including reading `image` back off the resource), runs the module, and populates `deployment.properties.deploymentName` and `deployment.properties.namespace` from the module outputs (note the rename: module output `name` → property `deploymentName`).
 
 ## Repository structure
 
 ```text
 ├── radius/                                    # Git submodule → radius-project/radius
 │                                              #   @ willdavsmith/recipe-direct-module-support (the feature branch)
-├── modules/
-│   └── redis/                                 # STANDARD Terraform module — no Radius conventions
-│       ├── main.tf
-│       ├── variables.tf
-│       └── outputs.tf
 ├── types/
-│   └── redisCaches.yaml                       # Custom resource type Demo.Datastores/redisCaches
+│   └── deployments.yaml                       # Custom resource type Demo.Kubernetes/deployments
 ├── demo/
-│   ├── bicepconfig.json                       # Bicep extension configuration
-│   ├── platform.bicep                         # Recipe pack (direct module) + environment
+│   ├── bicepconfig.json                       # Bicep extensions: local radius-extension.tgz + deployments-extension.tgz
+│   ├── platform.bicep                         # Recipe pack (direct registry module) + environment
 │   └── app.bicep                              # Developer-facing resource
 └── .github/
     ├── actions/radius-direct-module-e2e/      # Composite E2E action (install → setup → deploy → verify)
     └── workflows/
-        ├── e2e-kind.yaml                       # Hermetic E2E on kind (push / PR / dispatch)
-        └── e2e-k3d.yaml                        # Hermetic E2E on k3d (dispatch)
+        ├── e2e-kind.yaml                       # E2E on kind (push / PR / dispatch)
+        └── e2e-k3d.yaml                        # E2E on k3d (dispatch)
 ```
 
 > The `radius` submodule is pinned to the feature branch. The E2E builds **two** control-plane images from it: `applications-rp` (serves `Radius.Core/recipePacks`, including the new `outputs` field) and `dynamic-rp` (runs the recipe engine — direct-module parsing, parameter resolution, and outputs mapping).
@@ -77,35 +73,44 @@ The [`radius-direct-module-e2e`](.github/actions/radius-direct-module-e2e/action
 
 1. builds the `rad` CLI and the `applications-rp` + `dynamic-rp` images from the `radius` submodule;
 2. installs Radius from the worktree Helm chart, overriding both images (`--set rp.image/tag` and `--set dynamicrp.image/tag`);
-3. **[PE]** registers the `Demo.Datastores/redisCaches` type, builds the Bicep extensions (the **Radius core** extension from the submodule — so it carries the new `outputs` field — plus the demo type's extension), and deploys `platform.bicep` (recipe pack + environment);
+3. **[PE]** registers the `Demo.Kubernetes/deployments` type, builds the Bicep extensions (the **Radius core** extension from the submodule — so it carries the new `outputs` field — plus the demo type's extension), and deploys `platform.bicep` (recipe pack + environment);
 4. **[Developer]** deploys `app.bicep`;
 5. **verifies** the module ran and the outputs were mapped:
-   - `rad resource show` reports `properties.endpoint` and `properties.port` populated from the module outputs,
-   - the `endpoint` value (`demo-redis.<namespace>.svc.cluster.local`) proves the `{{context.*}}` expressions resolved,
-   - `kubectl` confirms the Redis `Deployment` and `Service` exist in the cluster.
+   - `rad resource show` reports `properties.deploymentName` and `properties.namespace` populated from the module outputs,
+   - `deploymentName == demo-redis` proves the `{{context.*}}` expressions resolved and the module's `name` output was mapped back,
+   - `kubectl` confirms the Redis `Deployment` is available in the cluster.
 
-The kind and k3d workflows are **hermetic**: the control-plane images are side-loaded into the cluster, and the Terraform module is fetched over `git::` from this repo at the workflow SHA.
+The Terraform Registry module (and the `hashicorp/kubernetes` provider it needs) are fetched in-cluster by the recipe engine, so the cluster needs outbound network access to `registry.terraform.io` — kind and k3d nodes have this by default. The Redis image the module deploys is **side-loaded** into the cluster so that container pull is hermetic (Docker Hub is rate-limited anonymously in CI).
 
-> **Note:** for the in-cluster Terraform fetch to succeed, this repository must be **public** (or you must configure Radius Git credentials for the module source). The module is fetched via `git::https://github.com/<org>/<repo>.git//modules/redis?ref=<sha>`.
+> Because the module comes from the public Terraform Registry (not this repo), this repository does **not** need to be public for the demo to run. The `radius` submodule is fetched from the public `radius-project/radius` repo.
 
 ### Why the Radius Bicep extension is built from source
 
 The `outputs` field on `Radius.Core/recipePacks` is **new in this feature** and is not yet in the published `br:biceptypes.azurecr.io/radius` Bicep types. So [`demo/bicepconfig.json`](demo/bicepconfig.json) points the `radius` extension at a **local `radius-extension.tgz`** that `make radius-extension` generates from the submodule's OpenAPI specs (`make generate-bicep-types` → `bicep publish-extension`). Once these types are released, the demo can switch `radius` back to the published `br:` reference.
+
+## Version pinning
+
+Terraform Registry modules are referenced by a `<namespace>/<name>/<provider>` address (e.g. `terraform-iaac/deployment/kubernetes`) plus a separate `version`, not a URL. This feature pins the version with a `<source>:<version>` convention in `recipeLocation`, mirroring how Bicep/OCI recipes embed the version in the image tag (see [radius-project/radius#12086](https://github.com/radius-project/radius/issues/12086)):
+
+```bicep
+recipeLocation: 'terraform-iaac/deployment/kubernetes:1.4.6'   // <source>:<version>
+```
+
+Radius splits this into the module `source` and `version` fields of the generated `main.tf.json`. The split is collision-safe: only a colon in the final path segment is treated as a version, so a registry `host:port` (e.g. `my.registry.com:8443/ns/name/aws`) and `://` URL sources (Git/HTTP/OCI) are left untouched.
 
 ## Quick start (local)
 
 ### Prerequisites
 
 - [kind](https://kind.sigs.k8s.io/) or [k3d](https://k3d.io/)
-- [Terraform](https://developer.hashicorp.com/terraform/install)
 - Go (matching `radius/go.mod`) and Docker, to build the control-plane images
 - Node.js (matching `radius/.node-version`), [`yq`](https://github.com/mikefarah/yq), and the [Bicep CLI](https://github.com/Azure/bicep/releases) — to generate the Radius core Bicep extension from the submodule (see [above](#why-the-radius-bicep-extension-is-built-from-source))
 
 ### 1. Clone with submodules
 
 ```bash
-git clone --recurse-submodules https://github.com/<org>/061726-direct-module.git
-cd 061726-direct-module
+git clone --recurse-submodules https://github.com/willdavsmith/radius-direct-module-demo.git
+cd radius-direct-module-demo
 ```
 
 ### 2. Build + install Radius from the feature branch
@@ -133,31 +138,13 @@ rad workspace switch default && rad env switch default --preview
 make setup   # registers the resource type + builds the Bicep extensions
              # (generates the Radius core types from the submodule — slow on first run)
 cd demo
-rad deploy platform.bicep \
-  -p moduleTemplatePath='git::https://github.com/<org>/061726-direct-module.git//modules/redis?ref=main'
+rad deploy platform.bicep
 ```
 
 ### 4. Developer deploy
 
 ```bash
 rad deploy app.bicep
-rad resource show Demo.Datastores/redisCaches demo-redis
-# properties.endpoint and properties.port are populated from the module outputs
+rad resource show Demo.Kubernetes/deployments demo-redis
+# properties.deploymentName and properties.namespace are populated from the module outputs
 ```
-
-## Terraform Registry modules and versions
-
-Terraform Registry modules are not URLs and require a separate `version` argument. This feature uses a `<source>:<version>` convention in `recipeLocation`, mirroring how Bicep/OCI recipes embed the version in the image tag (see [radius-project/radius#12086](https://github.com/radius-project/radius/issues/12086)):
-
-```bicep
-'Demo.Datastores/redisCaches': {
-  recipeKind: 'terraform'
-  recipeLocation: 'terraform-aws-modules/rds/aws:6.1.0'   // <source>:<version>
-  parameters: { /* ... */ }
-  outputs:    { /* ... */ }
-}
-```
-
-Radius splits this into the module `source` and `version` fields of the generated `main.tf.json`. The split is collision-safe: only a colon in the final path segment is treated as a version, so a registry `host:port` (e.g. `my.registry.com:8443/ns/name/aws`) and `://` URL sources are left untouched.
-
-> Registry modules require the cluster to have network egress to the registry, so this path is exercised on cloud clusters rather than the hermetic kind/k3d workflows here.

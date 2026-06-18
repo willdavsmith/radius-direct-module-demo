@@ -17,9 +17,6 @@ inputs:
   image-tag:
     description: Shared tag for the locally built control-plane images.
     required: true
-  module-template-path:
-    description: "git:: URL the direct Terraform module recipe is fetched from."
-    required: true
   image-pull-secret-name:
     description: Optional docker-registry secret to attach as global.imagePullSecrets (cloud clusters). Empty for kind/k3d.
     required: false
@@ -119,17 +116,17 @@ runs:
         #  - radius-extension.tgz: the Radius core types from the submodule,
         #    including the new recipePack `outputs` field (not yet in the
         #    published `br:biceptypes.azurecr.io/radius` types).
-        #  - redisCaches-extension.tgz: the demo's custom resource type.
+        #  - deployments-extension.tgz: the demo's custom resource type.
         rad bicep download
         make build
 
     - name: '[PE] Provision recipe pack and environment'
       shell: bash
       working-directory: demo
-      env:
-        MODULE_TEMPLATE_PATH: ${{ inputs.module-template-path }}
       run: |
-        rad deploy platform.bicep -p moduleTemplatePath="${MODULE_TEMPLATE_PATH}"
+        # recipeLocation in platform.bicep points at a Terraform Registry module
+        # pinned with the `<source>:<version>` convention; nothing to inject.
+        rad deploy platform.bicep
 
     - name: '[Developer] Deploy application'
       shell: bash
@@ -139,27 +136,27 @@ runs:
     - name: '[Verify] Recipe outputs mapped onto resource properties'
       shell: bash
       run: |
-        # The `outputs` mapping should have populated endpoint + port from the
-        # standard module's outputs. Empty values mean the mapping did not run.
-        JSON=$(rad resource show Demo.Datastores/redisCaches demo-redis -o json)
-        ENDPOINT=$(echo "$JSON" | jq -r '.properties.endpoint // ""')
-        PORT=$(echo "$JSON" | jq -r '.properties.port // ""')
-        echo "endpoint=$ENDPOINT port=$PORT"
-        test -n "$ENDPOINT"
-        test "$PORT" = "6379"
-        # endpoint is <name>.<namespace>.svc.cluster.local — proves the
-        # {{context.resource.name}} expression resolved to the resource name.
-        echo "$ENDPOINT" | grep -q '^demo-redis\.'
-        NS=$(echo "$ENDPOINT" | cut -d. -f2)
+        # The `outputs` mapping should have populated deploymentName + namespace
+        # from the registry module's outputs. Empty values mean it did not run.
+        JSON=$(rad resource show Demo.Kubernetes/deployments demo-redis -o json)
+        DEPLOYMENT=$(echo "$JSON" | jq -r '.properties.deploymentName // ""')
+        NS=$(echo "$JSON" | jq -r '.properties.namespace // ""')
+        echo "deploymentName=$DEPLOYMENT namespace=$NS"
+        test -n "$DEPLOYMENT"
+        test -n "$NS"
+        # deploymentName == the resource name proves {{context.resource.name}}
+        # resolved and the module's `name` output was mapped back.
+        test "$DEPLOYMENT" = "demo-redis"
         echo "NS=$NS" >> "$GITHUB_ENV"
+        echo "DEPLOYMENT=$DEPLOYMENT" >> "$GITHUB_ENV"
         echo "Resource properties populated from module outputs"
 
-    - name: '[Verify] Standard module executed in the cluster'
+    - name: '[Verify] Registry module executed in the cluster'
       shell: bash
       run: |
-        kubectl wait --for=condition=available deployment/demo-redis -n "$NS" --timeout=180s
-        kubectl get service demo-redis -n "$NS"
-        echo "Standard Terraform module deployed Redis into namespace $NS"
+        kubectl wait --for=condition=available deployment/"$DEPLOYMENT" -n "$NS" --timeout=180s
+        kubectl get deployment "$DEPLOYMENT" -n "$NS"
+        echo "Standard Terraform Registry module deployed $DEPLOYMENT into namespace $NS"
 
     - name: Dump diagnostics on failure
       if: failure()
@@ -178,7 +175,7 @@ runs:
         kubectl logs -n radius-system -l app.kubernetes.io/name=dynamic-rp -c terraform-init --tail=100 2>/dev/null || true
         echo ""
         echo "=== Resource ==="
-        rad resource show Demo.Datastores/redisCaches demo-redis 2>/dev/null || true
+        rad resource show Demo.Kubernetes/deployments demo-redis 2>/dev/null || true
 
     - name: Cleanup Radius resources
       if: always()

@@ -2,6 +2,8 @@ SHELL := /bin/bash
 
 DEMO_DIR := demo
 TYPES_DIR := types
+TYPE_MANIFEST := $(TYPES_DIR)/deployments.yaml
+USER_EXT := $(DEMO_DIR)/deployments-extension.tgz
 
 .PHONY: help register-types build radius-extension user-extension setup clean
 
@@ -9,9 +11,9 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[34;1m%-20s\033[0m %s\n", $$1, $$2}'
 
 register-types: ## Register the demo resource type with Radius
-	@echo "==> Registering Demo.Datastores/redisCaches..."
-	rad resource-type create -f $(TYPES_DIR)/redisCaches.yaml || \
-		(echo "    Retrying after 5s..." && sleep 5 && rad resource-type create -f $(TYPES_DIR)/redisCaches.yaml)
+	@echo "==> Registering Demo.Kubernetes/deployments..."
+	rad resource-type create -f $(TYPE_MANIFEST) || \
+		(echo "    Retrying after 5s..." && sleep 5 && rad resource-type create -f $(TYPE_MANIFEST))
 	@echo "Resource type registered"
 
 build: radius-extension user-extension ## Build both Bicep extensions into demo/
@@ -25,12 +27,12 @@ radius-extension: ## Generate + publish the Radius core Bicep extension (adds th
 
 user-extension: ## Build the demo resource-type Bicep extension into demo/
 	@echo "==> Building demo resource-type Bicep extension..."
-	rad bicep publish-extension -f $(TYPES_DIR)/redisCaches.yaml --target $(DEMO_DIR)/redisCaches-extension.tgz --force 2>&1 | grep -v WARNING || true
-	@echo "Demo extension built at $(DEMO_DIR)/redisCaches-extension.tgz"
+	rad bicep publish-extension -f $(TYPE_MANIFEST) --target $(USER_EXT) --force 2>&1 | grep -v WARNING || true
+	@echo "Demo extension built at $(USER_EXT)"
 
-setup: register-types build ## Register the type and build the extension
+setup: register-types build ## Register the type and build the extensions
 	@echo "Setup complete. Deploy with:"
-	@echo "  rad deploy $(DEMO_DIR)/platform.bicep -p moduleTemplatePath='git::https://github.com/<org>/<repo>.git//modules/redis?ref=<sha>'"
+	@echo "  rad deploy $(DEMO_DIR)/platform.bicep"
 	@echo "  rad deploy $(DEMO_DIR)/app.bicep"
 
 clean: ## Remove generated extension files
