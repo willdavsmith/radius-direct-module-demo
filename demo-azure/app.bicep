@@ -17,7 +17,7 @@ resource app 'Radius.Core/applications@2025-08-01-preview' = {
 // A standard Radius resource. The platform engineer wired its recipe to a plain
 // Azure Verified Module (see platform.bicep), so this developer-facing
 // definition only supplies the (unique) account name. `accountId` and
-// `primaryBlobEndpoint` are populated by Radius from the module's outputs.
+// `location` are populated by Radius from the module's outputs.
 resource account 'Demo.Azure/storageAccounts@2023-10-01-preview' = {
   name: 'demo-storage'
   properties: {
@@ -30,5 +30,5 @@ resource account 'Demo.Azure/storageAccounts@2023-10-01-preview' = {
 @description('Resource ID of the created storage account, mapped from the module `resourceId` output by the recipe.')
 output accountId string = account.properties.accountId
 
-@description('Primary blob endpoint, mapped from the module `primaryBlobEndpoint` output by the recipe.')
-output primaryBlobEndpoint string = account.properties.primaryBlobEndpoint
+@description('Azure region of the created storage account, mapped from the module `location` output by the recipe.')
+output location string = account.properties.location

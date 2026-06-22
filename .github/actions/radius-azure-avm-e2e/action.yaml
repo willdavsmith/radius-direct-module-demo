@@ -173,14 +173,14 @@ runs:
         STORAGE_ACCOUNT_NAME: ${{ inputs.storage-account-name }}
       run: |
         # The `outputs` mapping should have populated accountId and
-        # primaryBlobEndpoint from the AVM's outputs. Empty values mean the
+        # location from the AVM's outputs. Empty values mean the
         # module did not run or the mapping was dropped.
         JSON=$(rad resource show Demo.Azure/storageAccounts demo-storage -o json)
         ACCOUNT_ID=$(echo "$JSON" | jq -r '.properties.accountId // ""')
-        BLOB=$(echo "$JSON" | jq -r '.properties.primaryBlobEndpoint // ""')
-        echo "accountId=$ACCOUNT_ID primaryBlobEndpoint=$BLOB"
+        LOCATION=$(echo "$JSON" | jq -r '.properties.location // ""')
+        echo "accountId=$ACCOUNT_ID location=$LOCATION"
         test -n "$ACCOUNT_ID"
-        test -n "$BLOB"
+        test -n "$LOCATION"
         # accountId ends with the unique name we passed, proving the
         # {{context.resource.properties.accountName}} expression resolved and the
         # module's `resourceId` output was mapped back.

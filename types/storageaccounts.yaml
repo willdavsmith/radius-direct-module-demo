@@ -18,9 +18,9 @@ types:
             accountId:
               type: string
               description: Resource ID of the created storage account. Populated by Radius from the module's `resourceId` output via the recipe `outputs` mapping.
-            primaryBlobEndpoint:
+            location:
               type: string
-              description: Primary blob endpoint of the created storage account. Populated by Radius from the module's `primaryBlobEndpoint` output via the recipe `outputs` mapping.
+              description: Azure region of the created storage account. Populated by Radius from the module's `location` output via the recipe `outputs` mapping.
           required:
             - environment
             - accountName

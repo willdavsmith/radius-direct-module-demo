@@ -38,16 +38,6 @@ resource recipes 'Radius.Core/recipePacks@2025-08-01-preview' = {
           name: '{{context.resource.properties.accountName}}'
           skuName: 'Standard_LRS'
           kind: 'StorageV2'
-          // The AVM module only emits primaryBlobEndpoint when a blob container
-          // is defined, so deploy one. This also exercises a nested object/array
-          // recipe parameter through the Bicep recipe path.
-          blobServices: {
-            containers: [
-              {
-                name: 'data'
-              }
-            ]
-          }
           // AVM modules emit a Microsoft.Resources/deployments telemetry resource
           // (api-version 2024-03-01) that the Radius bicep deployment engine can't
           // process at location "global". Disabling telemetry skips it — this is
@@ -56,9 +46,11 @@ resource recipes 'Radius.Core/recipePacks@2025-08-01-preview' = {
         }
         // Map the module's outputs onto the resource's properties.
         // Keys are resource property names; values are module output names.
+        // `location` is computed by the module (we don't pass it), so it proves
+        // a value the developer never supplied flows back from the module.
         outputs: {
           accountId: 'resourceId'
-          primaryBlobEndpoint: 'primaryBlobEndpoint'
+          location: 'location'
         }
       }
     }
