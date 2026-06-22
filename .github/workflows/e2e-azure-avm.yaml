@@ -1,0 +1,93 @@
+name: E2E (Azure AVM — manual)
+
+# Manual-only: this provisions a REAL Azure storage account via an Azure Verified
+# Module and needs Azure credentials. Configure the repository secrets/variables
+# documented in the README before running (Settings → Secrets and variables →
+# Actions):
+#   secrets:   AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   variables: AZURE_LOCATION
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      CLUSTER_NAME: radius-e2e
+      LOCAL_REGISTRY: localhost
+      IMAGE_TAG: e2e
+      # Unique, per-run resource group so cleanup can delete it wholesale.
+      AZURE_RESOURCE_GROUP: radius-avm-demo-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Create kind cluster
+        run: kind create cluster --name "$CLUSTER_NAME" --wait 120s
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: radius/go.mod
+          cache-dependency-path: radius/go.sum
+
+      - name: Build control-plane images
+        working-directory: radius
+        run: |
+          make docker-build-applications-rp \
+            DOCKER_REGISTRY="$LOCAL_REGISTRY" \
+            DOCKER_TAG_VERSION="$IMAGE_TAG"
+          make docker-build-dynamic-rp \
+            DOCKER_REGISTRY="$LOCAL_REGISTRY" \
+            DOCKER_TAG_VERSION="$IMAGE_TAG"
+
+      - name: Side-load images into kind
+        run: |
+          kind load docker-image "$LOCAL_REGISTRY/applications-rp:$IMAGE_TAG" --name "$CLUSTER_NAME"
+          kind load docker-image "$LOCAL_REGISTRY/dynamic-rp:$IMAGE_TAG" --name "$CLUSTER_NAME"
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          # Service principal with secret. azure/login uses SP auth when a
+          # clientSecret is present in creds (no OIDC/federation required).
+          creds: >-
+            {"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}
+
+      - name: Create resource group
+        run: az group create --name "$AZURE_RESOURCE_GROUP" --location "${{ vars.AZURE_LOCATION }}"
+
+      - name: Generate unique storage account name
+        id: sa
+        # 3-24 lowercase alphanumerics; "rad" + 16 hex chars = 19 chars.
+        run: echo "name=rad$(openssl rand -hex 8)" >> "$GITHUB_OUTPUT"
+
+      - name: Run E2E (Azure AVM)
+        uses: ./.github/actions/radius-azure-avm-e2e
+        with:
+          applications-rp-image: ${{ env.LOCAL_REGISTRY }}/applications-rp
+          dynamic-rp-image: ${{ env.LOCAL_REGISTRY }}/dynamic-rp
+          image-tag: ${{ env.IMAGE_TAG }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          azure-resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+          storage-account-name: ${{ steps.sa.outputs.name }}
+
+      - name: Delete resource group
+        if: always()
+        run: az group delete --name "$AZURE_RESOURCE_GROUP" --yes --no-wait 2>/dev/null || true
+
+      - name: Cleanup cluster
+        if: always()
+        run: kind delete cluster --name "$CLUSTER_NAME" 2>/dev/null || true

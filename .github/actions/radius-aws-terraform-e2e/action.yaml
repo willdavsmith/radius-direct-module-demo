@@ -1,0 +1,231 @@
+name: Run Radius AWS direct-module E2E (Terraform)
+description: >
+  Cluster-agnostic Radius install (applications-rp + dynamic-rp built from the
+  radius submodule) plus platform-engineer setup, developer deploy, and verify
+  for direct module support against a STANDARD Terraform Registry AWS module
+  (terraform-aws-modules/s3-bucket/aws). Provisions a REAL S3 bucket, so it needs
+  AWS credentials and is intended to be run manually (workflow_dispatch). Assumes
+  kubeconfig is already configured against the target cluster and the
+  control-plane images are reachable from the cluster.
+
+inputs:
+  applications-rp-image:
+    description: Image repo (no tag) for the applications-rp container. Serves Radius.Core/recipePacks with the new `outputs` field.
+    required: true
+  dynamic-rp-image:
+    description: Image repo (no tag) for the dynamic-rp container. Runs the recipe engine (direct-module parsing, parameter resolution, outputs mapping).
+    required: true
+  image-tag:
+    description: Shared tag for the locally built control-plane images.
+    required: true
+  image-pull-secret-name:
+    description: Optional docker-registry secret to attach as global.imagePullSecrets (cloud clusters). Empty for kind/k3d.
+    required: false
+    default: ""
+  aws-access-key-id:
+    description: AWS access key ID registered with Radius (`rad credential register aws access-key`) and used by the in-cluster Terraform AWS provider.
+    required: true
+  aws-secret-access-key:
+    description: AWS secret access key paired with aws-access-key-id.
+    required: true
+  aws-account-id:
+    description: AWS account ID the environment provisions resources into (sets the environment AWS provider scope).
+    required: true
+  aws-region:
+    description: AWS region the environment provisions resources into (sets the environment AWS provider region).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: radius/go.mod
+        cache-dependency-path: radius/go.sum
+
+    - name: Install Radius CLI
+      shell: bash
+      working-directory: radius
+      run: |
+        make build-binaries
+        sudo cp dist/linux_amd64/release/rad /usr/local/bin/rad
+        rad version
+
+    - name: Install Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_wrapper: false
+
+    - name: Set up Node.js
+      # Required to generate the Radius core Bicep types from the submodule.
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: radius/.node-version
+
+    - name: Install yq and the Bicep CLI
+      shell: bash
+      env:
+        BICEP_VER: v0.42.1
+        YQ_VERSION: v4.44.3
+      run: |
+        # yq is required by `make generate-bicep-types` (contrib namespaces).
+        sudo curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
+        sudo chmod +x /usr/local/bin/yq
+        # The standalone Bicep CLI publishes the Radius core extension index.
+        curl -Lo bicep "https://github.com/Azure/bicep/releases/download/${BICEP_VER}/bicep-linux-x64"
+        chmod +x ./bicep && sudo mv ./bicep /usr/local/bin/bicep
+        yq --version && bicep --version
+
+    - name: Install Radius from the worktree chart
+      shell: bash
+      working-directory: radius
+      env:
+        APPLICATIONS_RP_IMAGE: ${{ inputs.applications-rp-image }}
+        DYNAMIC_RP_IMAGE: ${{ inputs.dynamic-rp-image }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        IMAGE_PULL_SECRET: ${{ inputs.image-pull-secret-name }}
+      run: |
+        EXTRA=""
+        if [ -n "$IMAGE_PULL_SECRET" ]; then
+          kubectl create namespace radius-system 2>/dev/null || true
+          EXTRA="--set global.imagePullSecrets[0].name=$IMAGE_PULL_SECRET"
+        fi
+        # The recipePack `outputs` field is served by applications-rp (rp.*),
+        # and the recipe engine runs in dynamic-rp (dynamicrp.*); both must be
+        # the locally built images for the feature to be exercised end to end.
+        rad install kubernetes \
+          --reinstall \
+          --chart deploy/Chart \
+          --set rp.image=$APPLICATIONS_RP_IMAGE \
+          --set rp.tag=$IMAGE_TAG \
+          --set dynamicrp.image=$DYNAMIC_RP_IMAGE \
+          --set dynamicrp.tag=$IMAGE_TAG \
+          $EXTRA
+        kubectl wait --for=condition=available deployment --all -n radius-system --timeout=300s
+
+    - name: '[PE] Create workspace, group, and environment'
+      shell: bash
+      run: |
+        rad group create default
+        rad env create default --preview --group default
+        rad workspace create kubernetes default \
+          --context "$(kubectl config current-context)" \
+          --group default
+        rad workspace switch default
+        rad env switch default --preview
+
+    - name: '[PE] Register AWS credentials with Radius'
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+      run: |
+        # The Terraform driver fetches these from UCP and injects them as
+        # access_key/secret_key into the module's AWS provider config.
+        rad credential register aws access-key \
+          --access-key-id "$AWS_ACCESS_KEY_ID" \
+          --secret-access-key "$AWS_SECRET_ACCESS_KEY"
+
+    - name: '[PE] Register resource type'
+      shell: bash
+      run: make register-types-aws
+
+    - name: '[PE] Build Bicep extensions'
+      shell: bash
+      run: |
+        # Builds the local extensions referenced by demo-aws/bicepconfig.json:
+        #  - radius-extension.tgz: the Radius core types from the submodule,
+        #    including the new recipePack `outputs` field.
+        #  - buckets-extension.tgz: the demo's Demo.AWS/buckets resource type.
+        rad bicep download
+        make build-aws
+
+    - name: '[PE] Provision recipe pack and environment'
+      shell: bash
+      working-directory: demo-aws
+      env:
+        AWS_ACCOUNT_ID: ${{ inputs.aws-account-id }}
+        AWS_REGION: ${{ inputs.aws-region }}
+      run: |
+        # platform.bicep sets the environment AWS provider scope (account + region)
+        # and points the recipe at a Terraform Registry module pinned `:<version>`.
+        rad deploy platform.bicep \
+          --parameters awsAccountId="$AWS_ACCOUNT_ID" \
+          --parameters awsRegion="$AWS_REGION"
+
+    - name: '[Developer] Deploy application'
+      shell: bash
+      working-directory: demo-aws
+      run: rad deploy app.bicep
+
+    - name: '[Verify] Recipe outputs mapped onto resource properties'
+      shell: bash
+      run: |
+        # The `outputs` mapping should have populated bucketName/bucketArn/
+        # bucketRegion from the registry module's outputs. Empty values mean the
+        # module did not run or the mapping was dropped.
+        JSON=$(rad resource show Demo.AWS/buckets demo-bucket -o json)
+        BUCKET=$(echo "$JSON" | jq -r '.properties.bucketName // ""')
+        ARN=$(echo "$JSON" | jq -r '.properties.bucketArn // ""')
+        REGION=$(echo "$JSON" | jq -r '.properties.bucketRegion // ""')
+        echo "bucketName=$BUCKET bucketArn=$ARN bucketRegion=$REGION"
+        test -n "$BUCKET"
+        test -n "$ARN"
+        test -n "$REGION"
+        # bucket_prefix derives from {{context.resource.name}} = demo-bucket, so
+        # the generated name proves the expression resolved and outputs mapped.
+        case "$BUCKET" in demo-bucket-*) ;; *) echo "unexpected bucket name: $BUCKET"; exit 1 ;; esac
+        echo "BUCKET=$BUCKET" >> "$GITHUB_ENV"
+        echo "Resource properties populated from module outputs"
+
+    - name: '[Verify] Bucket exists in AWS'
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+      run: |
+        aws s3api head-bucket --bucket "$BUCKET"
+        echo "Standard Terraform Registry module created S3 bucket $BUCKET"
+
+    - name: Dump diagnostics on failure
+      if: failure()
+      shell: bash
+      run: |
+        echo "=== Pods ==="
+        kubectl get pods --all-namespaces
+        echo ""
+        echo "=== dynamic-rp logs (recipe engine) ==="
+        kubectl logs -n radius-system -l app.kubernetes.io/name=dynamic-rp -c dynamic-rp --tail=200 2>/dev/null || true
+        echo ""
+        echo "=== applications-rp logs (recipePacks) ==="
+        kubectl logs -n radius-system -l app.kubernetes.io/name=applications-rp -c applications-rp --tail=200 2>/dev/null || true
+        echo ""
+        echo "=== terraform-init logs ==="
+        kubectl logs -n radius-system -l app.kubernetes.io/name=dynamic-rp -c terraform-init --tail=100 2>/dev/null || true
+        echo ""
+        echo "=== Resource ==="
+        rad resource show Demo.AWS/buckets demo-bucket 2>/dev/null || true
+
+    - name: Cleanup Radius resources
+      if: always()
+      shell: bash
+      run: |
+        # Deleting the application triggers `terraform destroy`, which removes the
+        # S3 bucket the module created.
+        rad application delete direct-module-aws-demo --yes 2>/dev/null || true
+
+    - name: Cleanup orphaned S3 bucket (belt and suspenders)
+      if: always()
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
+        AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
+      run: |
+        # If `terraform destroy` already removed the bucket this is a harmless
+        # no-op; otherwise it prevents a real bucket from leaking on a failed run.
+        if [ -n "${BUCKET:-}" ]; then
+          aws s3 rb "s3://$BUCKET" --force 2>/dev/null || true
+        fi

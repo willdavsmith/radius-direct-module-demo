@@ -1,0 +1,25 @@
+namespace: Demo.AWS
+types:
+  buckets:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            bucketName:
+              type: string
+              description: Name of the created S3 bucket. Populated by Radius from the module's `s3_bucket_id` output via the recipe `outputs` mapping.
+            bucketArn:
+              type: string
+              description: ARN of the created S3 bucket. Populated by Radius from the module's `s3_bucket_arn` output via the recipe `outputs` mapping.
+            bucketRegion:
+              type: string
+              description: AWS region the bucket was created in. Populated by Radius from the module's `s3_bucket_region` output via the recipe `outputs` mapping.
+          required:
+            - environment

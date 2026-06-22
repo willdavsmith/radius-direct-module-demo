@@ -53,16 +53,31 @@ Radius pins and fetches the registry module at `1.4.6`, resolves the parameter e
 ├── radius/                                    # Git submodule → radius-project/radius
 │                                              #   @ willdavsmith/recipe-direct-module-support (the feature branch)
 ├── types/
-│   └── deployments.yaml                       # Custom resource type Demo.Kubernetes/deployments
-├── demo/
+│   ├── deployments.yaml                       # Custom resource type Demo.Kubernetes/deployments
+│   ├── buckets.yaml                           # Custom resource type Demo.AWS/buckets (cloud variant)
+│   └── storageaccounts.yaml                   # Custom resource type Demo.Azure/storageAccounts (cloud variant)
+├── demo/                                       # Kubernetes demo (Terraform Registry module, no cloud creds)
 │   ├── bicepconfig.json                       # Bicep extensions: local radius-extension.tgz + deployments-extension.tgz
 │   ├── platform.bicep                         # Recipe pack (direct registry module) + environment
 │   └── app.bicep                              # Developer-facing resource
+├── demo-aws/                                  # AWS variant (real S3 bucket via terraform-aws-modules/s3-bucket/aws)
+│   ├── bicepconfig.json
+│   ├── platform.bicep
+│   └── app.bicep
+├── demo-azure/                                # Azure variant (real storage account via avm/res/storage/storage-account)
+│   ├── bicepconfig.json
+│   ├── platform.bicep
+│   └── app.bicep
 └── .github/
-    ├── actions/radius-direct-module-e2e/      # Composite E2E action (install → setup → deploy → verify)
+    ├── actions/
+    │   ├── radius-direct-module-e2e/          # Composite E2E action (Kubernetes; install → setup → deploy → verify)
+    │   ├── radius-aws-terraform-e2e/          # Composite E2E action (AWS Terraform)
+    │   └── radius-azure-avm-e2e/              # Composite E2E action (Azure AVM Bicep)
     └── workflows/
-        ├── e2e-kind.yaml                       # E2E on kind (push / PR / dispatch)
-        └── e2e-k3d.yaml                        # E2E on k3d (dispatch)
+        ├── e2e-kind.yaml                       # Kubernetes E2E on kind (push / PR / dispatch)
+        ├── e2e-k3d.yaml                        # Kubernetes E2E on k3d (dispatch)
+        ├── e2e-aws-terraform.yaml              # AWS E2E (dispatch; needs AWS credentials)
+        └── e2e-azure-avm.yaml                  # Azure E2E (dispatch; needs Azure credentials)
 ```
 
 > The `radius` submodule is pinned to the feature branch. The E2E builds **two** control-plane images from it: `applications-rp` (serves `Radius.Core/recipePacks`, including the new `outputs` field) and `dynamic-rp` (runs the recipe engine — direct-module parsing, parameter resolution, and outputs mapping).
@@ -147,4 +162,71 @@ rad deploy platform.bicep
 rad deploy app.bicep
 rad resource show Demo.Kubernetes/deployments demo-redis
 # properties.deploymentName and properties.namespace are populated from the module outputs
+```
+
+## Cloud variants (manual E2E)
+
+The Kubernetes demo above proves the direct-module mechanism end to end **without any cloud credentials**. Two additional variants prove the same mechanism against **real cloud providers**, each pointing `recipeLocation` at a standard, unwrapped community module:
+
+| Variant               | Standard module                                                                                                                       | Provisions                   | Workflow                                                             |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------|------------------------------|----------------------------------------------------------------------|
+| **AWS (Terraform)**   | [`terraform-aws-modules/s3-bucket/aws:4.2.2`](https://registry.terraform.io/modules/terraform-aws-modules/s3-bucket/aws)              | a real S3 bucket             | [`e2e-aws-terraform.yaml`](.github/workflows/e2e-aws-terraform.yaml) |
+| **Azure (Bicep AVM)** | [`avm/res/storage/storage-account:0.14.3`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/storage/storage-account) | a real Azure storage account | [`e2e-azure-avm.yaml`](.github/workflows/e2e-azure-avm.yaml)         |
+
+Both run **only on `workflow_dispatch`** — they cost money and need real credentials. Each spins up a kind cluster, installs Radius from the submodule, registers the cloud credential with Radius, deploys `platform.bicep` + `app.bicep` from the matching `demo-aws/` or `demo-azure/` directory, verifies the module's outputs were mapped onto the resource's properties (`rad resource show`), and confirms the resource actually exists in the cloud (`aws s3api head-bucket` / `az storage account show`). Resources are cleaned up on every run.
+
+- **AWS** uses the Terraform `<source>:<version>` convention and the module's `bucket_prefix` input, so the globally-unique bucket name never collides across runs. The Terraform driver injects the registered access-key credentials and the environment's region into the module's AWS provider — the developer resource (`demo-aws/app.bicep`) carries no module details at all.
+- **Azure** uses the standard Bicep/OCI `:<tag>` syntax. The Radius deployment engine downloads the AVM from the Microsoft Container Registry and deploys it to the environment's subscription + resource group with the registered service principal. The workflow creates a fresh per-run resource group (and deletes it afterwards) and generates a unique storage account name per run, which the developer supplies on the resource and the recipe reads via `{{context.resource.properties.accountName}}`.
+
+Both environments set their cloud provider scope directly in `platform.bicep` via the new `Radius.Core/environments` `providers.aws` / `providers.azure` fields, so no separate `rad env update` step is needed.
+
+### Required credentials
+
+Add these under the repository's **Settings → Secrets and variables → Actions** before running.
+
+**AWS** ([`e2e-aws-terraform.yaml`](.github/workflows/e2e-aws-terraform.yaml)):
+
+| Kind     | Name                    | Notes               |
+|----------|-------------------------|---------------------|
+| Secret   | `AWS_ACCESS_KEY_ID`     | IAM user access key |
+| Secret   | `AWS_SECRET_ACCESS_KEY` | IAM user secret key |
+| Variable | `AWS_REGION`            | e.g. `us-west-2`    |
+| Variable | `AWS_ACCOUNT_ID`        | 12-digit account ID |
+
+The IAM user needs permission to create and delete the demo S3 bucket and its configuration. The AWS-managed `AmazonS3FullAccess` policy works, or a scoped policy granting `s3:CreateBucket`, `s3:DeleteBucket`, `s3:PutBucket*`, `s3:PutEncryptionConfiguration`, `s3:GetBucket*`, `s3:GetEncryptionConfiguration`, `s3:ListBucket`, and `s3:ListAllMyBuckets`.
+
+**Azure** ([`e2e-azure-avm.yaml`](.github/workflows/e2e-azure-avm.yaml)):
+
+| Kind     | Name                    | Notes                    |
+|----------|-------------------------|--------------------------|
+| Secret   | `AZURE_CLIENT_ID`       | service principal app ID |
+| Secret   | `AZURE_CLIENT_SECRET`   | service principal secret |
+| Secret   | `AZURE_TENANT_ID`       | directory (tenant) ID    |
+| Secret   | `AZURE_SUBSCRIPTION_ID` | target subscription      |
+| Variable | `AZURE_LOCATION`        | e.g. `westus3`           |
+
+The service principal needs **Contributor** on the subscription (the workflow creates a resource group per run). If you switch the workflow to reuse a pre-created resource group, Contributor on that resource group is enough.
+
+> These use **static credentials** (an Azure SP secret and an AWS access key), the simplest path for an ephemeral kind cluster. Radius CI itself uses secret-less Azure **workload identity** and AWS **IRSA**, which avoid stored secrets but require an OIDC issuer on the cluster plus the azure-workload-identity webhook — heavier than a demo needs.
+
+### Run
+
+Trigger from the **Actions** tab (**Run workflow**) or with the GitHub CLI:
+
+```bash
+gh workflow run e2e-aws-terraform.yaml
+gh workflow run e2e-azure-avm.yaml
+```
+
+To run a cloud variant locally, follow the [Quick start](#quick-start-local) steps but register the cloud credential, build the cloud extensions, and deploy from the cloud directory — for example, AWS:
+
+```bash
+rad credential register aws access-key \
+  --access-key-id "$AWS_ACCESS_KEY_ID" --secret-access-key "$AWS_SECRET_ACCESS_KEY"
+make register-types-aws build-aws
+rad deploy demo-aws/platform.bicep \
+  --parameters awsAccountId="$AWS_ACCOUNT_ID" --parameters awsRegion="$AWS_REGION"
+rad deploy demo-aws/app.bicep
+rad resource show Demo.AWS/buckets demo-bucket
+# properties.bucketName / bucketArn / bucketRegion are populated from the module outputs
 ```

@@ -1,0 +1,26 @@
+namespace: Demo.Azure
+types:
+  storageAccounts:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            accountName:
+              type: string
+              description: Globally-unique storage account name (3-24 lowercase alphanumerics). Set by the developer and passed to the module via a {{context.resource.properties.accountName}} expression.
+            accountId:
+              type: string
+              description: Resource ID of the created storage account. Populated by Radius from the module's `resourceId` output via the recipe `outputs` mapping.
+            primaryBlobEndpoint:
+              type: string
+              description: Primary blob endpoint of the created storage account. Populated by Radius from the module's `primaryBlobEndpoint` output via the recipe `outputs` mapping.
+          required:
+            - environment
+            - accountName
