@@ -3,7 +3,7 @@ description: >
   Cluster-agnostic Radius install (applications-rp + dynamic-rp built from the
   radius submodule) plus platform-engineer setup, developer deploy, and verify
   for direct module support against a STANDARD Terraform Registry AWS module
-  (terraform-aws-modules/s3-bucket/aws). Provisions a REAL S3 bucket, so it needs
+  (terraform-aws-modules/sns/aws). Provisions a REAL SNS topic, so it needs
   AWS credentials and is intended to be run manually (workflow_dispatch). Assumes
   kubeconfig is already configured against the target cluster and the
   control-plane images are reachable from the cluster.
@@ -137,7 +137,7 @@ runs:
         # Builds the local extensions referenced by demo-aws/bicepconfig.json:
         #  - radius-extension.tgz: the Radius core types from the submodule,
         #    including the new recipePack `outputs` field.
-        #  - buckets-extension.tgz: the demo's Demo.AWS/buckets resource type.
+        #  - topics-extension.tgz: the demo's Demo.AWS/topics resource type.
         rad bicep download
         make build-aws
 
@@ -162,32 +162,32 @@ runs:
     - name: '[Verify] Recipe outputs mapped onto resource properties'
       shell: bash
       run: |
-        # The `outputs` mapping should have populated bucketName/bucketArn/
-        # bucketRegion from the registry module's outputs. Empty values mean the
+        # The `outputs` mapping should have populated topicName/topicArn/
+        # topicOwner from the registry module's outputs. Empty values mean the
         # module did not run or the mapping was dropped.
-        JSON=$(rad resource show Demo.AWS/buckets demo-bucket -o json)
-        BUCKET=$(echo "$JSON" | jq -r '.properties.bucketName // ""')
-        ARN=$(echo "$JSON" | jq -r '.properties.bucketArn // ""')
-        REGION=$(echo "$JSON" | jq -r '.properties.bucketRegion // ""')
-        echo "bucketName=$BUCKET bucketArn=$ARN bucketRegion=$REGION"
-        test -n "$BUCKET"
+        JSON=$(rad resource show Demo.AWS/topics demo-topic -o json)
+        NAME=$(echo "$JSON" | jq -r '.properties.topicName // ""')
+        ARN=$(echo "$JSON" | jq -r '.properties.topicArn // ""')
+        OWNER=$(echo "$JSON" | jq -r '.properties.topicOwner // ""')
+        echo "topicName=$NAME topicArn=$ARN topicOwner=$OWNER"
+        test -n "$NAME"
         test -n "$ARN"
-        test -n "$REGION"
-        # bucket_prefix derives from {{context.resource.name}} = demo-bucket, so
+        test -n "$OWNER"
+        # use_name_prefix derives from {{context.resource.name}} = demo-topic, so
         # the generated name proves the expression resolved and outputs mapped.
-        case "$BUCKET" in demo-bucket-*) ;; *) echo "unexpected bucket name: $BUCKET"; exit 1 ;; esac
-        echo "BUCKET=$BUCKET" >> "$GITHUB_ENV"
+        case "$NAME" in demo-topic-*) ;; *) echo "unexpected topic name: $NAME"; exit 1 ;; esac
+        echo "TOPIC_ARN=$ARN" >> "$GITHUB_ENV"
         echo "Resource properties populated from module outputs"
 
-    - name: '[Verify] Bucket exists in AWS'
+    - name: '[Verify] Topic exists in AWS'
       shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
         AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
       run: |
-        aws s3api head-bucket --bucket "$BUCKET"
-        echo "Standard Terraform Registry module created S3 bucket $BUCKET"
+        aws sns get-topic-attributes --topic-arn "$TOPIC_ARN"
+        echo "Standard Terraform Registry module created SNS topic $TOPIC_ARN"
 
     - name: Dump diagnostics on failure
       if: failure()
@@ -206,17 +206,17 @@ runs:
         kubectl logs -n radius-system -l app.kubernetes.io/name=dynamic-rp -c terraform-init --tail=100 2>/dev/null || true
         echo ""
         echo "=== Resource ==="
-        rad resource show Demo.AWS/buckets demo-bucket 2>/dev/null || true
+        rad resource show Demo.AWS/topics demo-topic 2>/dev/null || true
 
     - name: Cleanup Radius resources
       if: always()
       shell: bash
       run: |
         # Deleting the application triggers `terraform destroy`, which removes the
-        # S3 bucket the module created.
+        # SNS topic the module created.
         rad application delete direct-module-aws-demo --yes 2>/dev/null || true
 
-    - name: Cleanup orphaned S3 bucket (belt and suspenders)
+    - name: Cleanup orphaned SNS topic (belt and suspenders)
       if: always()
       shell: bash
       env:
@@ -224,8 +224,8 @@ runs:
         AWS_SECRET_ACCESS_KEY: ${{ inputs.aws-secret-access-key }}
         AWS_DEFAULT_REGION: ${{ inputs.aws-region }}
       run: |
-        # If `terraform destroy` already removed the bucket this is a harmless
-        # no-op; otherwise it prevents a real bucket from leaking on a failed run.
-        if [ -n "${BUCKET:-}" ]; then
-          aws s3 rb "s3://$BUCKET" --force 2>/dev/null || true
+        # If `terraform destroy` already removed the topic this is a harmless
+        # no-op; otherwise it prevents a real topic from leaking on a failed run.
+        if [ -n "${TOPIC_ARN:-}" ]; then
+          aws sns delete-topic --topic-arn "$TOPIC_ARN" 2>/dev/null || true
         fi

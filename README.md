@@ -54,13 +54,13 @@ Radius pins and fetches the registry module at `1.4.6`, resolves the parameter e
 │                                              #   @ willdavsmith/recipe-direct-module-support (the feature branch)
 ├── types/
 │   ├── deployments.yaml                       # Custom resource type Demo.Kubernetes/deployments
-│   ├── buckets.yaml                           # Custom resource type Demo.AWS/buckets (cloud variant)
+│   ├── topics.yaml                            # Custom resource type Demo.AWS/topics (cloud variant)
 │   └── storageaccounts.yaml                   # Custom resource type Demo.Azure/storageAccounts (cloud variant)
 ├── demo/                                       # Kubernetes demo (Terraform Registry module, no cloud creds)
 │   ├── bicepconfig.json                       # Bicep extensions: local radius-extension.tgz + deployments-extension.tgz
 │   ├── platform.bicep                         # Recipe pack (direct registry module) + environment
 │   └── app.bicep                              # Developer-facing resource
-├── demo-aws/                                  # AWS variant (real S3 bucket via terraform-aws-modules/s3-bucket/aws)
+├── demo-aws/                                  # AWS variant (real SNS topic via terraform-aws-modules/sns/aws)
 │   ├── bicepconfig.json
 │   ├── platform.bicep
 │   └── app.bicep
@@ -170,12 +170,12 @@ The Kubernetes demo above proves the direct-module mechanism end to end **withou
 
 | Variant               | Standard module                                                                                                                       | Provisions                   | Workflow                                                             |
 |-----------------------|---------------------------------------------------------------------------------------------------------------------------------------|------------------------------|----------------------------------------------------------------------|
-| **AWS (Terraform)**   | [`terraform-aws-modules/s3-bucket/aws:4.2.2`](https://registry.terraform.io/modules/terraform-aws-modules/s3-bucket/aws)              | a real S3 bucket             | [`e2e-aws-terraform.yaml`](.github/workflows/e2e-aws-terraform.yaml) |
+| **AWS (Terraform)**   | [`terraform-aws-modules/sns/aws:7.1.0`](https://registry.terraform.io/modules/terraform-aws-modules/sns/aws)                          | a real SNS topic             | [`e2e-aws-terraform.yaml`](.github/workflows/e2e-aws-terraform.yaml) |
 | **Azure (Bicep AVM)** | [`avm/res/storage/storage-account:0.14.3`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/storage/storage-account) | a real Azure storage account | [`e2e-azure-avm.yaml`](.github/workflows/e2e-azure-avm.yaml)         |
 
-Both run **only on `workflow_dispatch`** — they cost money and need real credentials. Each spins up a kind cluster, installs Radius from the submodule, registers the cloud credential with Radius, deploys `platform.bicep` + `app.bicep` from the matching `demo-aws/` or `demo-azure/` directory, verifies the module's outputs were mapped onto the resource's properties (`rad resource show`), and confirms the resource actually exists in the cloud (`aws s3api head-bucket` / `az storage account show`). Resources are cleaned up on every run.
+Both run **only on `workflow_dispatch`** — they cost money and need real credentials. Each spins up a kind cluster, installs Radius from the submodule, registers the cloud credential with Radius, deploys `platform.bicep` + `app.bicep` from the matching `demo-aws/` or `demo-azure/` directory, verifies the module's outputs were mapped onto the resource's properties (`rad resource show`), and confirms the resource actually exists in the cloud (`aws sns get-topic-attributes` / `az storage account show`). Resources are cleaned up on every run.
 
-- **AWS** uses the Terraform `<source>:<version>` convention and the module's `bucket_prefix` input, so the globally-unique bucket name never collides across runs. The Terraform driver injects the registered access-key credentials and the environment's region into the module's AWS provider — the developer resource (`demo-aws/app.bicep`) carries no module details at all.
+- **AWS** uses the Terraform `<source>:<version>` convention and the module's `use_name_prefix` input, so the topic name never collides across runs. The Terraform driver injects the registered access-key credentials and the environment's region into the module's AWS provider — the developer resource (`demo-aws/app.bicep`) carries no module details at all.
 - **Azure** uses the standard Bicep/OCI `:<tag>` syntax. The Radius deployment engine downloads the AVM from the Microsoft Container Registry and deploys it to the environment's subscription + resource group with the registered service principal. The workflow creates a fresh per-run resource group (and deletes it afterwards) and generates a unique storage account name per run, which the developer supplies on the resource and the recipe reads via `{{context.resource.properties.accountName}}`.
 
 Both environments set their cloud provider scope directly in `platform.bicep` via the new `Radius.Core/environments` `providers.aws` / `providers.azure` fields, so no separate `rad env update` step is needed.
@@ -193,7 +193,7 @@ Add these under the repository's **Settings → Secrets and variables → Action
 | Variable | `AWS_REGION`            | e.g. `us-west-2`    |
 | Variable | `AWS_ACCOUNT_ID`        | 12-digit account ID |
 
-The IAM user needs permission to create and delete the demo S3 bucket and its configuration. The AWS-managed `AmazonS3FullAccess` policy works, or a scoped policy granting `s3:CreateBucket`, `s3:DeleteBucket`, `s3:PutBucket*`, `s3:PutEncryptionConfiguration`, `s3:GetBucket*`, `s3:GetEncryptionConfiguration`, `s3:ListBucket`, and `s3:ListAllMyBuckets`.
+The IAM user needs permission to create and delete the demo SNS topic. The AWS-managed `AmazonSNSFullAccess` policy works, or a scoped policy granting `sns:CreateTopic`, `sns:DeleteTopic`, `sns:GetTopicAttributes`, `sns:SetTopicAttributes`, `sns:ListTopics`, `sns:TagResource`, and `sns:ListTagsForResource`.
 
 **Azure** ([`e2e-azure-avm.yaml`](.github/workflows/e2e-azure-avm.yaml)):
 
@@ -227,6 +227,6 @@ make register-types-aws build-aws
 rad deploy demo-aws/platform.bicep \
   --parameters awsAccountId="$AWS_ACCOUNT_ID" --parameters awsRegion="$AWS_REGION"
 rad deploy demo-aws/app.bicep
-rad resource show Demo.AWS/buckets demo-bucket
-# properties.bucketName / bucketArn / bucketRegion are populated from the module outputs
+rad resource show Demo.AWS/topics demo-topic
+# properties.topicName / topicArn / topicOwner are populated from the module outputs
 ```

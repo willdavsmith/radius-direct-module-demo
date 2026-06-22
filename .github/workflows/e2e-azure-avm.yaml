@@ -66,6 +66,12 @@ jobs:
       - name: Create resource group
         run: az group create --name "$AZURE_RESOURCE_GROUP" --location "${{ vars.AZURE_LOCATION }}"
 
+      - name: Register Microsoft.Storage resource provider
+        # A subscription not yet registered for Microsoft.Storage fails the AVM
+        # deployment within seconds (MissingSubscriptionRegistration). This is a
+        # fast no-op when the provider is already registered.
+        run: az provider register --namespace Microsoft.Storage --wait
+
       - name: Generate unique storage account name
         id: sa
         # 3-24 lowercase alphanumerics; "rad" + 16 hex chars = 19 chars.
@@ -83,6 +89,32 @@ jobs:
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           azure-resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
           storage-account-name: ${{ steps.sa.outputs.name }}
+
+      - name: Capture Azure deployment errors
+        if: failure()
+        # The Radius deployment engine reports the Azure async operation as
+        # "Failed" but does not surface the inner ARM error. Pull it straight
+        # from Azure (resources, ARM deployments, and the activity log) before
+        # the resource group is deleted.
+        run: |
+          echo "=== Resources in $AZURE_RESOURCE_GROUP ==="
+          az resource list -g "$AZURE_RESOURCE_GROUP" -o table 2>/dev/null || true
+          echo ""
+          echo "=== ARM deployments in $AZURE_RESOURCE_GROUP ==="
+          az deployment group list -g "$AZURE_RESOURCE_GROUP" \
+            --query "[].{name:name, state:properties.provisioningState}" -o table 2>/dev/null || true
+          for dep in $(az deployment group list -g "$AZURE_RESOURCE_GROUP" --query "[].name" -o tsv 2>/dev/null); do
+            echo ""
+            echo "=== Failed operations for deployment '$dep' ==="
+            az deployment operation group list -g "$AZURE_RESOURCE_GROUP" --name "$dep" \
+              --query "[?properties.provisioningState=='Failed'].{resource:properties.targetResource.id, code:properties.statusCode, message:properties.statusMessage}" \
+              -o json 2>/dev/null || true
+          done
+          echo ""
+          echo "=== Activity log errors (last 1h) ==="
+          az monitor activity-log list -g "$AZURE_RESOURCE_GROUP" --offset 1h \
+            --query "[?level=='Error' || level=='Critical'].{op:operationName.localizedValue, status:status.value, message:properties.statusMessage}" \
+            -o json 2>/dev/null || true
 
       - name: Delete resource group
         if: always()

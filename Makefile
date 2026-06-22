@@ -5,10 +5,10 @@ AWS_DEMO_DIR := demo-aws
 AZURE_DEMO_DIR := demo-azure
 TYPES_DIR := types
 TYPE_MANIFEST := $(TYPES_DIR)/deployments.yaml
-AWS_TYPE_MANIFEST := $(TYPES_DIR)/buckets.yaml
+AWS_TYPE_MANIFEST := $(TYPES_DIR)/topics.yaml
 AZURE_TYPE_MANIFEST := $(TYPES_DIR)/storageaccounts.yaml
 USER_EXT := $(DEMO_DIR)/deployments-extension.tgz
-AWS_USER_EXT := $(AWS_DEMO_DIR)/buckets-extension.tgz
+AWS_USER_EXT := $(AWS_DEMO_DIR)/topics-extension.tgz
 AZURE_USER_EXT := $(AZURE_DEMO_DIR)/storageaccounts-extension.tgz
 
 # The generated Radius core Bicep type index, shared by every demo's
@@ -33,7 +33,7 @@ register-types: ## Register the Kubernetes demo resource type with Radius
 	@echo "Resource type registered"
 
 register-types-aws: ## Register the AWS demo resource type with Radius
-	@echo "==> Registering Demo.AWS/buckets..."
+	@echo "==> Registering Demo.AWS/topics..."
 	rad resource-type create -f $(AWS_TYPE_MANIFEST) || \
 		(echo "    Retrying after 5s..." && sleep 5 && rad resource-type create -f $(AWS_TYPE_MANIFEST))
 	@echo "Resource type registered"

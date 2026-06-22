@@ -1,0 +1,25 @@
+namespace: Demo.AWS
+types:
+  topics:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            topicName:
+              type: string
+              description: Name of the created SNS topic. Populated by Radius from the module's `topic_name` output via the recipe `outputs` mapping.
+            topicArn:
+              type: string
+              description: ARN of the created SNS topic. Populated by Radius from the module's `topic_arn` output via the recipe `outputs` mapping.
+            topicOwner:
+              type: string
+              description: AWS account ID that owns the topic. Populated by Radius from the module's `topic_owner` output via the recipe `outputs` mapping.
+          required:
+            - environment
