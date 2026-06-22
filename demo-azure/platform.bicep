@@ -31,7 +31,7 @@ resource recipes 'Radius.Core/recipePacks@2025-08-01-preview' = {
         recipeKind: 'bicep'
         // Standard Azure Verified Module, version pinned with `:<tag>`
         // (https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/storage/storage-account).
-        recipeLocation: 'br:mcr.microsoft.com/bicep/avm/res/storage/storage-account:0.14.3'
+        recipeLocation: 'mcr.microsoft.com/bicep/avm/res/storage/storage-account:0.14.3'
         parameters: {
           // The storage account name must be globally unique and <=24 lowercase
           // alphanumerics; the developer supplies a unique value on the resource.

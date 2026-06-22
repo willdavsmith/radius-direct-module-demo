@@ -1,0 +1,25 @@
+namespace: Demo.AWS
+types:
+  repositories:
+    apiVersions:
+      "2023-10-01-preview":
+        schema:
+          type: object
+          properties:
+            environment:
+              type: string
+              description: The resource ID of the environment.
+            application:
+              type: string
+              description: The resource ID of the application.
+            repositoryName:
+              type: string
+              description: Name of the created ECR repository. Populated by Radius from the module's `repository_name` output via the recipe `outputs` mapping.
+            repositoryArn:
+              type: string
+              description: ARN of the created ECR repository. Populated by Radius from the module's `repository_arn` output via the recipe `outputs` mapping.
+            repositoryUrl:
+              type: string
+              description: URL of the created ECR repository. Populated by Radius from the module's `repository_url` output via the recipe `outputs` mapping.
+          required:
+            - environment

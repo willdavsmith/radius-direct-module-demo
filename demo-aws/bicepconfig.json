@@ -4,6 +4,6 @@
   },
   "extensions": {
     "radius": "radius-extension.tgz",
-    "topics": "topics-extension.tgz"
+    "repositories": "repositories-extension.tgz"
   }
 }
