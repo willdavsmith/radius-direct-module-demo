@@ -34,11 +34,14 @@ resource recipes 'Radius.Core/recipePacks@2025-08-01-preview' = {
         recipeLocation: 'terraform-aws-modules/ecr/aws:3.2.0'
         parameters: {
           // The repository name is derived from the resource name via a
-          // {{context.*}} expression. `create_repository_policy: false` keeps
-          // the module to a single `aws_ecr_repository` resource, and
+          // {{context.*}} expression. Disabling the repository policy (and its
+          // generated IAM policy document) and the lifecycle policy keeps the
+          // module to a single `aws_ecr_repository` resource, and
           // `repository_force_delete: true` lets cleanup tear it down cleanly.
           repository_name: '{{context.resource.name}}'
+          attach_repository_policy: false
           create_repository_policy: false
+          create_lifecycle_policy: false
           repository_force_delete: true
         }
         // Map the module's outputs onto the resource's properties.

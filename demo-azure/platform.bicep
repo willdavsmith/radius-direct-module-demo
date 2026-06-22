@@ -38,6 +38,11 @@ resource recipes 'Radius.Core/recipePacks@2025-08-01-preview' = {
           name: '{{context.resource.properties.accountName}}'
           skuName: 'Standard_LRS'
           kind: 'StorageV2'
+          // AVM modules emit a Microsoft.Resources/deployments telemetry resource
+          // (api-version 2024-03-01) that the Radius bicep deployment engine can't
+          // process at location "global". Disabling telemetry skips it — this is
+          // the standard AVM-sanctioned opt-out, not a workaround.
+          enableTelemetry: false
         }
         // Map the module's outputs onto the resource's properties.
         // Keys are resource property names; values are module output names.
